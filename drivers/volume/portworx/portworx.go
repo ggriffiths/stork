@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgrijalva/jwt-go"
 	version "github.com/hashicorp/go-version"
 	crdv1 "github.com/kubernetes-incubator/external-storage/snapshot/pkg/apis/crd/v1"
 	crdclient "github.com/kubernetes-incubator/external-storage/snapshot/pkg/client"
@@ -192,6 +193,7 @@ type portworx struct {
 	store           cache.Store
 	stopChannel     chan struct{}
 	sdkConn         *portworxGrpcConnection
+	sdkAuthToken    string
 	id              string
 	endpoint        string
 	jwtSharedSecret string
@@ -693,36 +695,70 @@ func (p *portworx) getUserVolDriver(annotations map[string]string) (volume.Volum
 
 }
 
+func isTokenExpired(token string) (bool, error) {
+	jwtToken, err := jwt.Parse(token)
+	if err != nil {
+
+	}
+
+	return jwtToken.Valid, nil
+}
+
+func (p *portworx) refreshSdkAuthToken() error {
+	claims := &auth.Claims{
+		Issuer: "stork.openstorage.io",
+		Name:   "Stork",
+
+		// Unique id for stork
+		// this id must be unique across all accounts accessing the px system
+		Subject: "stork.openstorage.io." + p.id,
+
+		// Only allow certain calls
+		Roles: []string{"system.user"},
+
+		// Be in all groups to have access to all resources
+		Groups: []string{"*"},
+	}
+
+	// This never returns an error, but just in case, check the value
+	signature, err := auth.NewSignatureSharedSecret(p.jwtSharedSecret)
+	if err != nil {
+		return err
+	}
+
+	// Set the token expiration
+	options := &auth.Options{
+		Expiration:  time.Now().Add(time.Hour).Unix(),
+		IATSubtract: 1 * time.Minute,
+	}
+
+	token, err := auth.Token(claims, signature, options)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (p *portworx) getSdkAuthToken() (string, error) {
+	tokenExpired, err := p.isTokenExpired(p.sdkAuthToken)
+	if err != nil {
+		return "", err
+	}
+
+	if tokenExpired {
+		err = p.refreshSdkAuthToken()
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return p.sdkAuthToken, nil
+}
+
 func (p *portworx) getAdminVolDriver() (volume.VolumeDriver, error) {
 	if len(p.jwtSharedSecret) != 0 {
-		claims := &auth.Claims{
-			Issuer: "stork.openstorage.io",
-			Name:   "Stork",
-
-			// Unique id for stork
-			// this id must be unique across all accounts accessing the px system
-			Subject: "stork.openstorage.io." + p.id,
-
-			// Only allow certain calls
-			Roles: []string{"system.user"},
-
-			// Be in all groups to have access to all resources
-			Groups: []string{"*"},
-		}
-
-		// This never returns an error, but just in case, check the value
-		signature, err := auth.NewSignatureSharedSecret(p.jwtSharedSecret)
-		if err != nil {
-			return nil, err
-		}
-
-		// Set the token expiration
-		options := &auth.Options{
-			Expiration:  time.Now().Add(time.Hour).Unix(),
-			IATSubtract: 1 * time.Minute,
-		}
-
-		token, err := auth.Token(claims, signature, options)
+		token, err := p.getSdkAuthToken()
 		if err != nil {
 			return nil, err
 		}
