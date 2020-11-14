@@ -813,7 +813,7 @@ func (c *csi) DeleteBackup(backup *storkapi.ApplicationBackup) error {
 func (c *csi) UpdateMigratedPersistentVolumeSpec(
 	pv *v1.PersistentVolume,
 ) (*v1.PersistentVolume, error) {
-	return nil, &errors.ErrNotSupported{}
+	return pv, nil
 }
 
 func (c *csi) getRestoreStorageClasses(backup *storkapi.ApplicationBackup, resources []runtime.Unstructured) ([]runtime.Unstructured, error) {
